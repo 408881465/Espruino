@@ -242,20 +242,21 @@ int net_linux_recv(JsNetwork *net, SocketType socketType, int sckt, void *buf, s
   } else if (n>0) {
     // receive data
     if (socketType & ST_UDP) {
+      // TODO: Use JsNetUDPPacketHeader here to tidy this up
       size_t delta =  sizeof(uint32_t) + sizeof(unsigned short) + sizeof(uint16_t);
       uint32_t *host = (uint32_t*)buf;
       unsigned short *port = (unsigned short*)&host[1];
       uint16_t *size = (unsigned short*)&port[1];
-      num = (int)recvfrom(sckt,buf+delta,len-delta,0,&fromAddr,&fromAddrLen);
+      num = (int)recvfrom(sckt,buf+delta,len-delta,0,(struct sockaddr *)&fromAddr,(socklen_t*)&fromAddrLen);
       *host = fromAddr.sin_addr.s_addr;
       *port = ntohs(fromAddr.sin_port);
-      *size = num;
+      *size = (uint16_t)num;
 
       DBG("Recv %d %x:%d", num, *host, *port);
       if (num==0) return -1; // select says data, but recv says 0 means connection is closed
-      num += delta;
+      num += (int)delta;
     } else {
-      num = (int)recvfrom(sckt,buf,len,0,&fromAddr,&fromAddrLen);
+      num = (int)recvfrom(sckt,buf,len,0,(struct sockaddr *)&fromAddr,(socklen_t*)&fromAddrLen);
       if (num==0) return -1; // select says data, but recv says 0 means connection is closed
     }
   }
@@ -282,19 +283,20 @@ int net_linux_send(JsNetwork *net, SocketType socketType, int sckt, const void *
     flags |= MSG_NOSIGNAL;
 #endif
     if (socketType & ST_UDP) {
-        sockaddr_in       sin;
-        size_t delta =  sizeof(uint32_t) + sizeof(unsigned short) + sizeof(uint16_t);
-        uint32_t *host = (uint32_t*)buf;
-        unsigned short *port = (unsigned short*)&host[1];
-        uint16_t *size = (uint16_t*)&port[1];
-        sin.sin_family = AF_INET;
-        sin.sin_addr.s_addr = *(in_addr_t*)host;
-        sin.sin_port = htons(*port);
+      // TODO: Use JsNetUDPPacketHeader here to tidy this up
+      sockaddr_in       sin;
+      size_t delta =  sizeof(uint32_t) + sizeof(unsigned short) + sizeof(uint16_t);
+      uint32_t *host = (uint32_t*)buf;
+      unsigned short *port = (unsigned short*)&host[1];
+      uint16_t *size = (uint16_t*)&port[1];
+      sin.sin_family = AF_INET;
+      sin.sin_addr.s_addr = *(in_addr_t*)host;
+      sin.sin_port = htons(*port);
 
-        DBG("Send %d %x:%d", len - delta, *host, *port);
-        n = (int)sendto(sckt, buf + delta, *size, flags, (struct sockaddr *)&sin, sizeof(sockaddr_in)) + delta;
+      DBG("Send %d %x:%d", len - delta, *host, *port);
+      n = (int)sendto(sckt, buf + delta, *size, flags, (struct sockaddr *)&sin, sizeof(sockaddr_in)) + (int)delta;
     } else {
-        n = (int)send(sckt, buf, len, flags);
+      n = (int)send(sckt, buf, len, flags);
     }
     return n;
   } else

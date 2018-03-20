@@ -32,10 +32,12 @@
 #include "ble_hci.h"
 #include "ble_advdata.h"
 #include "ble_conn_params.h"
-#include "softdevice_handler.h"
 #include "app_timer.h"
 #include "ble_nus.h"
 #include "app_util_platform.h"
+#if NRF_SD_BLE_API_VERSION<5
+#include "softdevice_handler.h"
+#endif
 
 #ifdef USE_NFC
 #include "nfc_uri_msg.h"
@@ -157,7 +159,7 @@ void jswrap_nrf_init() {
   } else {
 #ifdef USE_NFC
     // start NFC, if it had been set
-    JsVar *flatStr = jsvObjectGetChild(execInfo.hiddenRoot, "NFC", 0);
+    JsVar *flatStr = jsvObjectGetChild(execInfo.hiddenRoot, "NfcEnabled", 0);
     if (flatStr) {
       uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
       if (flatStrPtr) jsble_nfc_start(flatStrPtr, jsvGetLength(flatStr));
@@ -320,6 +322,19 @@ Called when an NFC field is detected
   "ifdef" : "NRF52"
 }
 Called when an NFC field is no longer detected
+ */
+/*JSON{
+  "type" : "event",
+  "class" : "NRF",
+  "name" : "NFCrx",
+  "params" : [
+    ["arr","JsVar","An ArrayBuffer containign the received data"]
+  ],
+  "ifdef" : "NRF52"
+}
+When NFC is started with `NRF.nfcStart`, this is fired
+when NFC data is received. It doesn't get called if
+NFC is started with `NRF.nfcURL` or `NRF.nfcRaw`
  */
 /*JSON{
   "type" : "event",
@@ -776,7 +791,7 @@ JsVar *jswrap_nrf_bluetooth_getAdvertisingData(JsVar *data, JsVar *options) {
         advdata.p_manuf_specific_data = (ble_advdata_manuf_data_t*)alloca(sizeof(ble_advdata_manuf_data_t));
         advdata.p_manuf_specific_data->company_identifier = 0xFFFF; // pre-fill with test manufacturer data
         advdata.p_manuf_specific_data->data.size = dLen;
-        advdata.p_manuf_specific_data->data.p_data = dPtr;
+        advdata.p_manuf_specific_data->data.p_data = (uint8_t*)dPtr;
       }
       jsvUnLock(v);
     }
@@ -829,7 +844,11 @@ JsVar *jswrap_nrf_bluetooth_getAdvertisingData(JsVar *data, JsVar *options) {
   uint8_t   encoded_advdata[BLE_GAP_ADV_MAX_SIZE];
 
 #ifdef NRF5X
+#if NRF_SD_BLE_API_VERSION<5
   err_code = adv_data_encode(&advdata, encoded_advdata, &len_advdata);
+#else
+  err_code = ble_advdata_encode(&advdata, encoded_advdata, &len_advdata);
+#endif
 #else
   err_code = 0xDEAD;
   jsiConsolePrintf("FIXME\n");
@@ -1205,7 +1224,11 @@ void jswrap_nrf_bluetooth_updateServices(JsVar *data) {
                 err_code = sd_ble_gatts_hvx(m_conn_handle, &hvx_params);
                 if ((err_code != NRF_SUCCESS)
                   && (err_code != NRF_ERROR_INVALID_STATE)
+#if NRF_SD_BLE_API_VERSION<5
                   && (err_code != BLE_ERROR_NO_TX_PACKETS)
+#else
+                  && (err_code != NRF_ERROR_RESOURCES)
+#endif
                   && (err_code != BLE_ERROR_GATTS_SYS_ATTR_MISSING)) {
                   if (jsble_check_error(err_code))
                     ok = false;
@@ -1620,15 +1643,13 @@ Enables NFC and starts advertising the given URL. For example:
 ```
 NRF.nfcURL("http://espruino.com");
 ```
-
-**Note:** This is only available on nRF52-based devices
 */
 void jswrap_nrf_nfcURL(JsVar *url) {
 #ifdef USE_NFC
   // Check for disabling NFC
   if (jsvIsUndefined(url)) {
-    jsvObjectRemoveChild(execInfo.hiddenRoot, "NFC");
-    jsble_nfc_stop();
+    jsvObjectRemoveChild(execInfo.hiddenRoot, "NfcData");
+    jswrap_nrf_nfcStop();
     return;
   }
 
@@ -1637,9 +1658,6 @@ void jswrap_nrf_nfcURL(JsVar *url) {
     return;
   }
 
-  uint32_t err_code;
-  /* Turn off NFC */
-  jsble_nfc_stop();
   JSV_GET_AS_CHAR_ARRAY(urlPtr, urlLen, url);
   if (!urlPtr || !urlLen)
     return jsExceptionHere(JSET_ERROR, "Unable to get URL data");
@@ -1655,29 +1673,36 @@ void jswrap_nrf_nfcURL(JsVar *url) {
     uriType = NFC_URI_HTTPS;
   }
 
-  uint8_t msg_buf[256];
-  uint32_t len = sizeof(msg_buf);
-  /* Encode URI message into buffer */
-  err_code = nfc_uri_msg_encode( uriType, // TODO: could auto-prepend http/etc.
-                                 (uint8_t *)urlPtr,
-                                 urlLen,
-                                 msg_buf,
-                                 &len);
-  if (err_code)
-    return jsExceptionHere(JSET_ERROR, "nfc_uri_msg_encode: NFC error code %d", err_code);
-
-  /* Create a flat string - we need this to store the URI data so it hangs around.
-   * Avoid having a static var so we have RAM available if not using NFC */
-  JsVar *flatStr = jsvNewFlatStringOfLength(len);
+  /* Encode NDEF message into a flat string - we need this to store the
+   * data so it hangs around. Avoid having a static var so we have RAM
+   * available if not using NFC. NFC data is read by nfc_callback */
+  JsVar *flatStr = jsvNewFlatStringOfLength(NDEF_FULL_URL_HEADER_LEN + urlLen + NDEF_TERM_TLV_LEN);
   if (!flatStr)
     return jsExceptionHere(JSET_ERROR, "Unable to create string with URI data in");
-  jsvObjectSetChild(execInfo.hiddenRoot, "NFC", flatStr);
+  jsvObjectSetChild(execInfo.hiddenRoot, "NfcData", flatStr);
   uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
   jsvUnLock(flatStr);
-  memcpy(flatStrPtr, msg_buf, len);
 
-  // start nfc properly
-  jsble_nfc_start(flatStrPtr, len);
+  /* assemble NDEF Message */
+  memcpy(flatStrPtr, NDEF_HEADER, NDEF_FULL_URL_HEADER_LEN); /* fill header */
+  flatStrPtr[NDEF_IC_OFFSET] = uriType; /* set URI Identifier Code */
+  memcpy(flatStrPtr+NDEF_FULL_URL_HEADER_LEN, urlPtr, urlLen); /* add payload */
+
+  /* inject length fields into header */
+  flatStrPtr[NDEF_MSG_LEN_OFFSET] = NDEF_RECORD_HEADER_LEN + urlLen;
+  flatStrPtr[NDEF_PL_LEN_LSB_OFFSET] = NDEF_IC_LEN + urlLen;
+
+  /* write terminator TLV block */
+  flatStrPtr[NDEF_FULL_URL_HEADER_LEN + urlLen] = NDEF_TERM_TLV;
+
+  /* start nfc peripheral */
+  JsVar* uid = jswrap_nrf_nfcStart(NULL);
+
+  /* inject UID/BCC */
+  size_t len;
+  char *uidPtr = jsvGetDataPointer(uid, &len);
+  if(uidPtr) memcpy(flatStrPtr, uidPtr, TAG_HEADER_LEN);
+  jsvUnLock(uid);
 #endif
 }
 
@@ -1697,37 +1722,184 @@ Enables NFC and starts advertising with Raw data. For example:
 NRF.nfcRaw(new Uint8Array([193, 1, 0, 0, 0, 13, 85, 3, 101, 115, 112, 114, 117, 105, 110, 111, 46, 99, 111, 109]));
 // same as NRF.nfcURL("http://espruino.com");
 ```
-
-**Note:** This is only available on nRF52-based devices
 */
 void jswrap_nrf_nfcRaw(JsVar *payload) {
 #ifdef USE_NFC
   // Check for disabling NFC
   if (jsvIsUndefined(payload)) {
-    jsvObjectRemoveChild(execInfo.hiddenRoot, "NFC");
-    jsble_nfc_stop();
+    jsvObjectRemoveChild(execInfo.hiddenRoot, "NfcData");
+    jswrap_nrf_nfcStop();
     return;
   }
-
-  /* Turn off NFC */
-  jsble_nfc_stop();
 
   JSV_GET_AS_CHAR_ARRAY(dataPtr, dataLen, payload);
   if (!dataPtr || !dataLen)
     return jsExceptionHere(JSET_ERROR, "Unable to get NFC data");
 
   /* Create a flat string - we need this to store the NFC data so it hangs around.
-   * Avoid having a static var so we have RAM available if not using NFC */
-  JsVar *flatStr = jsvNewFlatStringOfLength(dataLen);
+   * Avoid having a static var so we have RAM available if not using NFC.
+   * NFC data is read by nfc_callback in bluetooth.c */
+  JsVar *flatStr = jsvNewFlatStringOfLength(NDEF_FULL_RAW_HEADER_LEN + dataLen + NDEF_TERM_TLV_LEN);
   if (!flatStr)
     return jsExceptionHere(JSET_ERROR, "Unable to create string with NFC data in");
-  jsvObjectSetChild(execInfo.hiddenRoot, "NFC", flatStr);
+  jsvObjectSetChild(execInfo.hiddenRoot, "NfcData", flatStr);
   uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
   jsvUnLock(flatStr);
-  memcpy(flatStrPtr, dataPtr, dataLen);
 
-  // start nfc properly
-  jsble_nfc_start(flatStrPtr, dataLen);
+  /* assemble NDEF Message */
+  memcpy(flatStrPtr, NDEF_HEADER, NDEF_FULL_RAW_HEADER_LEN); /* fill header */
+  memcpy(flatStrPtr+NDEF_FULL_RAW_HEADER_LEN, dataPtr, dataLen); /* add payload */
+
+  /* inject length fields into header */
+  flatStrPtr[NDEF_MSG_LEN_OFFSET] = dataLen;
+
+  /* write terminator TLV block */
+  flatStrPtr[NDEF_FULL_RAW_HEADER_LEN + dataLen] = NDEF_TERM_TLV;
+
+  /* start nfc peripheral */
+  JsVar* uid = jswrap_nrf_nfcStart(NULL);
+
+  /* inject UID/BCC */
+  size_t len;
+  char *uidPtr = jsvGetDataPointer(uid, &len);
+  if(uidPtr) memcpy(flatStrPtr, uidPtr, TAG_HEADER_LEN);
+  jsvUnLock(uid);
+#endif
+}
+
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "nfcStart",
+    "ifdef" : "NRF52",
+    "generate" : "jswrap_nrf_nfcStart",
+    "params" : [
+      ["payload","JsVar","Optional 7 byte UID"]
+    ],
+    "return" : ["JsVar", "Internal tag memory (first 10 bytes of tag data)" ]
+}
+**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+
+Enables NFC and starts advertising. `NFCrx` events will be
+fired when data is received.
+
+```
+NRF.nfcStart();
+```
+*/
+JsVar *jswrap_nrf_nfcStart(JsVar *payload) {
+#ifdef USE_NFC
+  /* Turn off NFC */
+  jsble_nfc_stop();
+
+  /* Create a flat string - we need this to store the NFC data so it hangs around.
+   * Avoid having a static var so we have RAM available if not using NFC */
+  JsVar *flatStr = 0;
+  if (!jsvIsUndefined(payload)) {
+    /* Custom UID */
+    JSV_GET_AS_CHAR_ARRAY(dataPtr, dataLen, payload);
+    if (!dataPtr || !dataLen) {
+      jsExceptionHere(JSET_ERROR, "Unable to get NFC data");
+      return 0;
+    }
+    flatStr = jsvNewFlatStringOfLength(dataLen);
+    if (!flatStr) {
+      jsExceptionHere(JSET_ERROR, "Unable to create string with NFC data in");
+      return 0;
+    }
+    jsvObjectSetChild(execInfo.hiddenRoot, "NfcEnabled", flatStr);
+    jsvUnLock(flatStr);
+    uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
+    memcpy(flatStrPtr, dataPtr, dataLen);
+  } else {
+    /* Default UID */
+    flatStr = jsvNewFlatStringOfLength(0);
+    if (!flatStr) {
+      jsExceptionHere(JSET_ERROR, "Unable to create string with NFC data in");
+      return 0;
+    }
+    jsvObjectSetChild(execInfo.hiddenRoot, "NfcEnabled", flatStr);
+    jsvUnLock(flatStr);
+  }
+
+  /* start nfc */
+  uint8_t *flatStrPtr = (uint8_t*)jsvGetFlatStringPointer(flatStr);
+  jsble_nfc_start(flatStrPtr, jsvGetLength(flatStr));
+
+  /* return internal tag header */
+  char *ptr = 0; size_t size = TAG_HEADER_LEN;
+  JsVar *arr = jsvNewArrayBufferWithPtr(size, &ptr);
+  if (ptr) jsble_nfc_get_internal((uint8_t *)ptr, &size);
+  return arr;
+#endif
+}
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "nfcStop",
+    "ifdef" : "NRF52",
+    "generate" : "jswrap_nrf_nfcStop",
+    "params" : [ ]
+}
+**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+
+Disables NFC.
+
+```
+NRF.nfcStop();
+```
+*/
+void jswrap_nrf_nfcStop() {
+#ifdef USE_NFC
+  jsvObjectRemoveChild(execInfo.hiddenRoot, "NfcEnabled");
+  jsble_nfc_stop();
+#endif
+}
+
+
+/*JSON{
+    "type" : "staticmethod",
+    "class" : "NRF",
+    "name" : "nfcSend",
+    "ifdef" : "NRF52",
+    "generate" : "jswrap_nrf_nfcSend",
+    "params" : [
+      ["payload","JsVar","Optional tx data"]
+    ]
+}
+**Advanced NFC Functionality.** If you just want to advertise a URL, use `NRF.nfcURL` instead.
+
+Acknowledges the last frame and optionally transmits a response.
+If payload is an array, then a array.length byte nfc frame is sent.
+If payload is a int, then a 4bit ACK/NACK is sent.
+**Note:** ```nfcSend``` should always be called after an ```NFCrx``` event.
+
+```
+NRF.nfcSend(new Uint8Array([0x01, 0x02, ...]));
+// or
+NRF.nfcSend(0x0A);
+// or
+NRF.nfcSend();
+```
+*/
+void jswrap_nrf_nfcSend(JsVar *payload) {
+#ifdef USE_NFC
+  /* Switch to RX */
+  if (jsvIsUndefined(payload))
+    return jsble_nfc_send_rsp(0, 0);
+
+  /* Send 4 bit ACK/NACK */
+  if (jsvIsInt(payload))
+    return jsble_nfc_send_rsp(jsvGetInteger(payload), 4);
+
+  /* Send n byte payload */
+  JSV_GET_AS_CHAR_ARRAY(dataPtr, dataLen, payload);
+  if (!dataPtr || !dataLen)
+    return jsExceptionHere(JSET_ERROR, "Unable to get NFC data");
+
+  jsble_nfc_send((uint8_t*)dataPtr, dataLen);
 #endif
 }
 
@@ -1823,8 +1995,6 @@ NRF.requestDevice({ filters: [{ namePrefix: 'Puck.js' }]}).then(
 
 Note that you'll have to keep track of the `gatt` variable so that you can
 disconnect the Bluetooth connection when you're done.
-
-**Note:** This is only available on some devices
 */
 #if CENTRAL_LINK_COUNT>0
 
@@ -1984,8 +2154,6 @@ NRF.connect("aa:bb:cc:dd:ee").then(function(g) {
   console.log("Done!");
 });
 ```
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_bluetooth_connect(JsVar *mac) {
 #if CENTRAL_LINK_COUNT>0
@@ -2032,7 +2200,26 @@ void jswrap_nrf_setWhitelist(bool whitelist) {
   "class" : "BluetoothDevice",
   "ifdef" : "NRF52"
 }
-Web Bluetooth-style device - get this using `NRF.requestDevice(address)`
+A Web Bluetooth-style device - you can request one using `NRF.requestDevice(address)`
+
+For example:
+
+```
+var gatt;
+NRF.requestDevice({ filters: [{ name: 'Puck.js abcd' }] }).then(function(device) {
+  console.log("found device");
+  return device.gatt.connect();
+}).then(function(g) {
+  gatt = g;
+  console.log("connected");
+  return gatt.startBonding();
+}).then(function() {
+  console.log("bonded", gatt.getSecurityStatus());
+  gatt.disconnect();
+}).catch(function(e) {
+  console.log("ERROR",e);
+});
+```
 */
 /*JSON{
     "type" : "property",
@@ -2042,8 +2229,6 @@ Web Bluetooth-style device - get this using `NRF.requestDevice(address)`
     "generate" : "jswrap_BluetoothDevice_gatt",
     "return" : ["JsVar", "A `BluetoothRemoteGATTServer` for this device" ]
 }
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_BluetoothDevice_gatt(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
@@ -2073,8 +2258,6 @@ Connect to a BLE device - returns a promise,
 the argument of which is the `BluetoothRemoteGATTServer` connection.
 
 See [`NRF.requestDevice`](/Reference#l_NRF_requestDevice) for usage examples.
-
-**Note:** This is only available on some devices
 */
 #if CENTRAL_LINK_COUNT>0
 static void _jswrap_nrf_bluetooth_central_connect(JsVar *addr) {
@@ -2124,7 +2307,7 @@ JsVar *jswrap_nrf_BluetoothRemoteGATTServer_connect(JsVar *parent) {
   "ifdef" : "NRF52"
 }
 Web Bluetooth-style GATT server - get this using `NRF.connect(address)`
-or `NRF.requestDevice(options)` then `response.gatt.connect`
+or `NRF.requestDevice(options)` and `response.gatt.connect`
 
 https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattserver
 */
@@ -2138,8 +2321,6 @@ https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattserver
 Disconnect from a previously connected BLE device connected with
 `NRF.connect` - this does not disconnect from something that has
 connected to the Espruino.
-
-**Note:** This is only available on some devices
 */
 void jswrap_BluetoothRemoteGATTServer_disconnect(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
@@ -2192,8 +2373,6 @@ NRF.requestDevice({ filters: [{ name: 'Puck.js abcd' }] }).then(function(device)
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Puck.js.
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTServer_startBonding(JsVar *parent, bool forceRePair) {
 #if CENTRAL_LINK_COUNT>0
@@ -2236,8 +2415,6 @@ negotiating a secure connection.
 
 **This is not part of the Web Bluetooth Specification.** It has been added
 specifically for Puck.js.
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTServer_getSecurityStatus(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
@@ -2254,10 +2431,10 @@ JsVar *jswrap_nrf_BluetoothRemoteGATTServer_getSecurityStatus(JsVar *parent) {
   "name" : "getPrimaryService",
   "generate" : "jswrap_BluetoothRemoteGATTServer_getPrimaryService",
   "params" : [ ["service","JsVar","The service UUID"] ],
-  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the primary service is found" ],
+  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the primary service is found (the argument contains a `BluetoothRemoteGATTService`)" ],
   "ifdef" : "NRF52"
 }
-**Note:** This is only available on some devices
+See `NRF.connect` for usage examples.
 */
 JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryService(JsVar *parent, JsVar *service) {
 #if CENTRAL_LINK_COUNT>0
@@ -2286,10 +2463,9 @@ JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryService(JsVar *parent, JsVar *
   "class" : "BluetoothRemoteGATTServer",
   "name" : "getPrimaryServices",
   "generate" : "jswrap_BluetoothRemoteGATTServer_getPrimaryServices",
-  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the primary services are found" ],
+  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the primary services are found (the argument contains an array of `BluetoothRemoteGATTService`)" ],
   "ifdef" : "NRF52"
 }
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_BluetoothRemoteGATTServer_getPrimaryServices(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
@@ -2331,7 +2507,6 @@ gattServer.setRSSIHandler();
 
 RSSI is the 'Received Signal Strength Indication' in dBm
 
-**Note:** This is only available on some devices
 */
 void jswrap_BluetoothRemoteGATTServer_setRSSIHandler(JsVar *parent, JsVar *callback) {
 #if CENTRAL_LINK_COUNT>0
@@ -2362,10 +2537,10 @@ https://webbluetoothcg.github.io/web-bluetooth/#bluetoothremotegattservice
   "name" : "getCharacteristic",
   "generate" : "jswrap_BluetoothRemoteGATTService_getCharacteristic",
   "params" : [ ["characteristic","JsVar","The characteristic UUID"] ],
-  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the characteristic is found" ],
+  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the characteristic is found (the argument contains a `BluetoothRemoteGATTCharacteristic`)" ],
   "ifdef" : "NRF52"
 }
-**Note:** This is only available on some devices
+See `NRF.connect` for usage examples.
 */
 JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristic(JsVar *parent, JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
@@ -2394,10 +2569,9 @@ JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristic(JsVar *parent, JsVar 
   "class" : "BluetoothRemoteGATTService",
   "name" : "getCharacteristics",
   "generate" : "jswrap_BluetoothRemoteGATTService_getCharacteristics",
-  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the characteristic is found" ],
+  "return" : ["JsVar", "A Promise that is resolved (or rejected) when the characteristic is found (the argument contains an array of `BluetoothRemoteGATTCharacteristic`)" ],
   "ifdef" : "NRF52"
 }
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_BluetoothRemoteGATTService_getCharacteristics(JsVar *parent) {
 #if CENTRAL_LINK_COUNT>0
@@ -2454,8 +2628,6 @@ NRF.connect(device_address).then(function(d) {
   console.log("Something's broken.");
 });
 ```
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_writeValue(JsVar *characteristic, JsVar *data) {
 #if CENTRAL_LINK_COUNT>0
@@ -2478,10 +2650,11 @@ JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_writeValue(JsVar *characteri
     "class" : "BluetoothRemoteGATTCharacteristic",
     "name" : "readValue",
     "generate" : "jswrap_nrf_BluetoothRemoteGATTCharacteristic_readValue",
-    "return" : ["JsVar", "A Promise that is resolved (or rejected) with a DataView when the characteristic is read" ]
+    "return" : ["JsVar", "A Promise that is resolved (or rejected) with a `DataView` when the characteristic is read" ],
+    "ifdef" : "NRF52"
 }
 
-Read a characteristic's value, return a promise containing a DataView
+Read a characteristic's value, return a promise containing a `DataView`
 
 ```
 var device;
@@ -2500,8 +2673,6 @@ NRF.connect(device_address).then(function(d) {
   console.log("Something's broken.");
 });
 ```
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_readValue(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
@@ -2522,7 +2693,8 @@ JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_readValue(JsVar *characteris
     "class" : "BluetoothRemoteGATTCharacteristic",
     "name" : "startNotifications",
     "generate" : "jswrap_nrf_BluetoothRemoteGATTCharacteristic_startNotifications",
-    "return" : ["JsVar", "A Promise that is resolved (or rejected) with data when notifications have been added" ]
+    "return" : ["JsVar", "A Promise that is resolved (or rejected) with data when notifications have been added" ],
+    "ifdef" : "NRF52"
 }
 Starts notifications - whenever this characteristic's value changes, a `characteristicvaluechanged` event is fired.
 
@@ -2565,8 +2737,6 @@ NRF.connect("pu:ck:js:ad:dr:es random").then(function(g) {
   console.log("Done!");
 });
 ```
-
-**Note:** This is only available on some devices
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_startNotifications(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0
@@ -2608,9 +2778,10 @@ JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_startNotifications(JsVar *ch
     "class" : "BluetoothRemoteGATTCharacteristic",
     "name" : "stopNotifications",
     "generate" : "jswrap_nrf_BluetoothRemoteGATTCharacteristic_stopNotifications",
-    "return" : ["JsVar", "A Promise that is resolved (or rejected) with data when notifications have been removed" ]
+    "return" : ["JsVar", "A Promise that is resolved (or rejected) with data when notifications have been removed" ],
+    "ifdef" : "NRF52"
 }
-**Note:** This is only available on some devices
+Stop notifications (that were requested with `BluetoothRemoteGATTCharacteristic.startNotifications`)
 */
 JsVar *jswrap_nrf_BluetoothRemoteGATTCharacteristic_stopNotifications(JsVar *characteristic) {
 #if CENTRAL_LINK_COUNT>0

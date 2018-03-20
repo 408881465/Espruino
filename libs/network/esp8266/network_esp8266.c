@@ -35,18 +35,17 @@ typedef long long int64_t;
 
 // Set NET_DBG to 0 to disable debug printf's, to 1 for important printf's
 #ifdef RELEASE
-#define NET_DBG 0
+  #define DBG(format, ...) do { } while(0)
 #else
-#define NET_DBG 1
-#endif
-// Normal debug
-#if NET_DBG > 0
-#define DBG(format, ...) os_printf(format, ## __VA_ARGS__)
-// #include "jsinteractive.h"
-// #define DBG(format, ...) jsiConsolePrintf(format, ## __VA_ARGS__)
-static char DBG_LIB[] = "net_esp8266"; // library name
-#else
-#define DBG(format, ...) do { } while(0)
+  // Normal debug
+  #if NET_DBG > 0
+    #define DBG(format, ...) os_printf(format, ## __VA_ARGS__)
+    // #include "jsinteractive.h"
+    // #define DBG(format, ...) jsiConsolePrintf(format, ## __VA_ARGS__)
+    static char DBG_LIB[] = "net_esp8266"; // library name
+  #else
+    #define DBG(format, ...) do { } while(0)
+  #endif
 #endif
 
 static struct socketData *getSocketData(int s);
@@ -837,6 +836,7 @@ int net_ESP8266_BOARD_recv(
 
   size_t delta = 0;
   if (socketType & ST_UDP) {
+    // TODO: Use JsNetUDPPacketHeader here to tidy this up
     delta = sizeof(uint32_t) + sizeof(unsigned short) + sizeof(uint16_t);
     uint32_t *host = (uint32_t*)buf;
     unsigned short *port = (unsigned short*)&host[1];
@@ -922,6 +922,7 @@ int net_ESP8266_BOARD_send(
   //os_printf("\n");
   size_t delta = 0;
   if (socketType & ST_UDP) {
+    // TODO: Use JsNetUDPPacketHeader here to tidy this up
     delta = sizeof(uint32_t) + sizeof(unsigned short) + sizeof(uint16_t);
     uint32_t *host = (uint32_t*)buf;
     unsigned short *port = (unsigned short*)&host[1];

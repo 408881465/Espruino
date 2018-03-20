@@ -33,6 +33,7 @@ info = {
    ],
    'makefile' : [
      'SAVE_ON_FLASH=1',
+     'DEFINES+=-DCONFIG_GPIO_AS_PINRESET', # Allow the reset pin to work
      'DEFINES+=-DUSE_DEBUGGER -DUSE_TAB_COMPLETE',
      'INCLUDE += -I$(ROOT)/libs/microbit',
      'WRAPPERSOURCES += libs/microbit/jswrap_microbit.c'
@@ -62,8 +63,8 @@ chip = {
 };
 
 devices = {
-  'BTN1' : { 'pin' : 'D5', 'pinstate' : 'IN_PULLUP' }, # 'P0_17' -  Pin negated in software
-  'BTN2' : { 'pin' : 'D11', 'pinstate' : 'IN_PULLUP' }, # 'P0_26' -  Pin negated in software
+  'BTN1' : { 'pin' : 'D5', 'pinstate' : 'IN_PULLDOWN' }, # 'P0_17' -  Pin negated in software
+  'BTN2' : { 'pin' : 'D11', 'pinstate' : 'IN_PULLDOWN' }, # 'P0_26' -  Pin negated in software
 };
 
 # left-right, or top-bottom order

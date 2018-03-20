@@ -22,6 +22,7 @@
 JsVar *jswrap_ESP32_getState();
 JsVar *jswrap_ESP32_setBoot(JsVar *jsPartitionName);
 void   jswrap_ESP32_reboot();
+void   jswrap_ESP32_deepSleep(int us);
 void   jswrap_ESP32_setAtten(Pin pin,int atten);
 
 void   jswrap_ESP32_setBLE_Debug(int level);
