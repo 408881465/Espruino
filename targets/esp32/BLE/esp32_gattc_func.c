@@ -53,9 +53,13 @@ void gattc_evt_reg(esp_gatt_if_t gattc_if,esp_ble_gattc_cb_param_t *param){
 void gattc_evt_connect(esp_gatt_if_t gattc_if,esp_ble_gattc_cb_param_t *param){
 	esp_ble_gattc_cb_param_t *p_data = (esp_ble_gattc_cb_param_t *)param;
 	gattc_apps[GATTC_PROFILE].conn_id = p_data->connect.conn_id;
+	m_central_conn_handle = 0x01;
 	memcpy(gattc_apps[GATTC_PROFILE].remote_bda, p_data->connect.remote_bda, sizeof(esp_bd_addr_t));
     esp_err_t mtu_ret = esp_ble_gattc_send_mtu_req (gattc_if, p_data->connect.conn_id);
     if (mtu_ret){jsWarn("config MTU error, error code = %x", mtu_ret);}
+}
+void gattc_evt_disconnect(esp_gatt_if_t gattc_if,esp_ble_gattc_cb_param_t *param){
+	m_central_conn_handle = BLE_GATT_HANDLE_INVALID;
 }
 void gattc_evt_cfg_mtu(esp_gatt_if_t gattc_if,esp_ble_gattc_cb_param_t *param){
 	if (!bleTaskInfo) bleTaskInfo = jsvNewEmptyArray();
@@ -100,7 +104,6 @@ void gattc_evt_write_char(esp_gatt_if_t gattc_if,esp_ble_gattc_cb_param_t *param
 void gattc_init(){
 	esp_err_t ret;	
 	ret = esp_ble_gattc_app_register(GATTC_PROFILE);if(ret){jsWarn("gattc register app error:%x\n",ret);return;}
-
 }
 void gattc_reset(){
 	esp_err_t ret;
@@ -108,6 +111,7 @@ void gattc_reset(){
 		ret = esp_ble_gattc_app_unregister(gattc_apps[GATTC_PROFILE].gattc_if);
 		if(ret) jsWarn("could not unregister GATTC(%d)\n",ret);
 	}
+	m_central_conn_handle = BLE_GATT_HANDLE_INVALID;
 }
 
 void gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if, esp_ble_gattc_cb_param_t *param) {
@@ -172,7 +176,8 @@ void reverseBDA(uint8_t *bda){
 void gattc_connect(uint8_t *addr){
 	esp_err_t ret;
 	reverseBDA(addr);
-	ret = esp_ble_gattc_open(gattc_apps[GATTC_PROFILE].gattc_if,addr,true);
+jsError("new parameter in esp_ble_gattc_open ???\n"); 
+	//ret = esp_ble_gattc_open(gattc_apps[GATTC_PROFILE].gattc_if,addr,true);
 }
 uint32_t gattc_disconnect(uint16_t conn_handle){
 	esp_err_t ret;
@@ -185,7 +190,6 @@ void gattc_searchService(ble_uuid_t uuid){
 }
 void gattc_getCharacteristic(ble_uuid_t char_uuid){
 	uint16_t count = 0;
-	//charFilter.uuid.uuid16 = char_uuid;
 	bleuuid_TO_espbtuuid(char_uuid,&charFilter);
 	esp_ble_gattc_get_attr_count( 
 		gattc_apps[GATTC_PROFILE].gattc_if, gattc_apps[GATTC_PROFILE].conn_id,ESP_GATT_DB_CHARACTERISTIC,

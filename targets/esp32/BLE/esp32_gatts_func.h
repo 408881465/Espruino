@@ -20,6 +20,17 @@
 
 #define GATTS_CHAR_VAL_LEN_MAX		22 // maximum length in bytes of a characteristic's value. TODO: find out how to determine this value?
 
+typedef enum {
+  BLE_SERVICE_GENERAL = 0,
+  BLE_SERVICE_NUS = 1
+} BLEServiceFlags;
+
+typedef enum {
+  BLE_CHAR_GENERAL = 0,
+  BLE_CHAR_UART_RX = 1,
+  BLE_CHAR_UART_TX = 2
+} BLECharFlags;
+
 struct gatts_service_inst {
 	uint16_t gatts_if;
 	uint16_t app_id;
@@ -29,6 +40,7 @@ struct gatts_service_inst {
 	uint16_t num_handles;
 	ble_uuid_t ble_uuid;
 	uint16_t uuid16;
+	BLEServiceFlags serviceFlag;
 };
 
 struct gatts_char_inst {
@@ -39,6 +51,7 @@ struct gatts_char_inst {
 	esp_attr_control_t *char_control;
 	uint16_t char_handle;
 	char char_nvs[16];
+	BLECharFlags charFlag;
 };
 
 struct gatts_descr_inst {
@@ -58,6 +71,9 @@ void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp
 void gatts_register_app(uint16_t id);
 void gatts_set_services(JsVar *data);
 void gatts_reset(bool removeValues);
+
+uint8_t *getUartAdvice();
+void gatts_sendNotification(int c);
 
 void gatts_test();
 

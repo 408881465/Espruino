@@ -166,7 +166,7 @@ $ cd template
 
 * Get partition table optimized for Espruino
 ```
-$ curl -O https://raw.githubusercontent.com/espruino/EspruinoBuildTools/master/esp32/build/app/partitions_espruino.csv
+$ curl -O https://raw.githubusercontent.com/espruino/Espruino/ESP32/targets/esp32/docs/Bluetooth/partitions_espruinoBLE.csv
 ```
 
 * If you need Arduino, you have to do it here with commands at the end of this document
@@ -179,19 +179,32 @@ $ make menuconfig
 * Change some of the settings necessary for Espruino:
 ```
 Component config -> LWIP -> Enable SO_REUSEADDR option [Enable]
-Component config -> ESP32-specific config ->  Task watchdog [Disable]
+Component config -> LWIP -> Max number of open sockets [10]
+Component config -> ESP32-specific config ->  Initialize Task Watchdog Timer on startup [Disable]
             sooner or later we need to find a way to refresh Task watchdog
 Component config -> FreeRTOS -> Halt when an SMP-untested function is called [Disable]
             some functions are marked as "SMP-untested" and a call results in a reset
             on our test they work fine, and for testing we need some of them
 Component config -> Log output -> Default log verbosity -> Error
 			send errors to log, not warnings or messages
-Component config -> Log output -> Use ANSI terminal clolors in log output [Disable]
+Component config -> Log output -> Use ANSI terminal colors in log output [Disable]
 			WEB IDE does not support colorized messages
+Serial flasher config Flash size [4 MB]
+			One of these nice surprises, we have to change default. Never heard about a board other than 4MB, but .....
 Partition Table -> Custom partition table CSV -> partitions_espruino.csv
 			uses partitionstable which is optimized for Espruino
 Bootloader config -> Bootloader log verbosity -> Error
-			during boot, send error messades only. Otherwise you get a lot of lines that are not helpful			
+			during boot, send error messades only. Otherwise you get a lot of lines that are not helpful
+Component config -> ESP32-specific -> Support for external, SPI-connected RAM [enable]
+			Enables support of external PSRAM like it is in WROVER boards
+Component config -> ESP32-specific -> SPI RAM config -> Ignore PSRAM when not found [Enable]
+			Avoid error and stop, if PSRAM is enabled but not found
+Component config -> ESP32-specific -> SPI RAM config ->Reserve this amount of bytes for data that specifically needs to be in DMA or internal memory [16384]
+			If this is too big, too much memory is allocated and Espruino will not start anymore
+Component config -> Bluetooth [Enable]
+			Enable Bluetooth (generally)
+Component config -> Bluetooth -> Bluedroid Enable -> Close the bluedroid bt stack log print [Disable]
+			This function otherwise would need a lot of RAM and reduce HEAP for Espruino jsVars dramatically
 ```
 
 * Perform a build to create the libraries and the template application.

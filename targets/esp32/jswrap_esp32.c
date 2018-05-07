@@ -20,9 +20,12 @@
 #include "jsparse.h"
 
 #include "esp_system.h"
-#include "esp_sleep.h"
+#include "esp_sleep.h"  //deepsleep is moved to new file in V3.0
 #include "app_update/include/esp_ota_ops.h"
+
+#ifdef BLUETOOTH
 #include "BLE/esp32_bluetooth_utils.h"
+#endif
 
 /*JSON{
  "type"     : "staticmethod",
@@ -62,8 +65,10 @@ void jswrap_ESP32_reboot() {
 Put device in deepsleep state for "us" microseconds.
 */
 void jswrap_ESP32_deepSleep(int us) {
-  esp_deep_sleep_enable_timer_wakeup((uint64_t)(us));
-  esp_deep_sleep_start(); // This function does not return.
+  //esp_deep_sleep_enable_timer_wakeup((uint64_t)(us));
+  //esp_deep_sleep_start(); // This function does not return.
+  //functions are replaced by this one in next version (V3.0)
+  esp_deep_sleep((uint64_t)(us));
 } // End of jswrap_ESP32_deepSleep
 
 
@@ -129,6 +134,7 @@ JsVar *jswrap_ESP32_setBoot(JsVar *jsPartitionName) {
   return esp32State;
 } // End of jswrap_ESP32_setBoot
 
+#ifdef BLUETOOTH
 /*JSON{
  "type"     : "staticmethod",
  "class"    : "ESP32",
@@ -136,9 +142,11 @@ JsVar *jswrap_ESP32_setBoot(JsVar *jsPartitionName) {
  "generate" : "jswrap_ESP32_setBLE_Debug",
  "params"   : [
    ["level", "int", "which events should be shown (GATTS, GATTC, GAP)"]
- ]
+ ],
+ "ifdef"	: "BLUETOOTH"
 }
 */
 void jswrap_ESP32_setBLE_Debug(int level){
 	ESP32_setBLE_Debug(level);
 }
+#endif

@@ -32,8 +32,8 @@
  
 volatile BLEStatus bleStatus;
 uint16_t bleAdvertisingInterval;           /**< The advertising interval (in units of 0.625 ms). */
-volatile uint16_t  m_conn_handle;    /**< Handle of the current connection. */
-volatile uint16_t m_central_conn_handle; /**< Handle of central mode connection */
+volatile uint16_t m_conn_handle = BLE_GATT_HANDLE_INVALID;    /**< Handle of the current connection. */
+volatile uint16_t m_central_conn_handle = BLE_GATT_HANDLE_INVALID; /**< Handle of central mode connection */
 
 /** Initialise the BLE stack */
 void jsble_init(){
@@ -45,6 +45,7 @@ void jsble_init(){
 	if(initBluedroid()) return;
 	if(registerCallbacks()) return;
 	setMtu();
+	gap_init_security();
 }
 /** Completely deinitialise the BLE stack */
 void jsble_kill(){
@@ -80,7 +81,6 @@ void jsble_restart_softdevice(){
 }
 
 void jsble_advertising_start(){
-//jsWarn("advertising start\n");
 	esp_err_t status;
 	if (bleStatus & BLE_IS_ADVERTISING) return;
 	status = bluetooth_gap_startAdvertizing(true);
@@ -92,22 +92,28 @@ void jsble_advertising_stop(){
 	if(status) jsWarn("error in stop advertising:0X%x\n",status);
 }
 /** Is BLE connected to any device at all? */
-bool jsble_has_connection(){
-	jsWarn("has connected not implemented yet\n");
-	return false;
+bool jsble_has_connection() {
+#if CENTRAL_LINK_COUNT>0
+  return (m_central_conn_handle != BLE_GATT_HANDLE_INVALID) ||
+         (m_conn_handle != BLE_GATT_HANDLE_INVALID);
+#else
+  return m_conn_handle != BLE_GATT_HANDLE_INVALID;
+#endif
 }
 
 /** Is BLE connected to a central device at all? */
-bool jsble_has_central_connection(){
-	jsWarn("has central connection not implemented yet\n");
-	return false;
-}
-/** Is BLE connected to a server device at all (eg, the simple, 'slave' mode)? */
-bool jsble_has_simple_connection(){
-	jsWarn("has simple connection not implemented yet\n");
-	return false;
+bool jsble_has_central_connection() {
+#if CENTRAL_LINK_COUNT>0
+  return (m_central_conn_handle != BLE_GATT_HANDLE_INVALID);
+#else
+  return false;
+#endif
 }
 
+/** Is BLE connected to a server device at all (eg, the simple, 'slave' mode)? */
+bool jsble_has_simple_connection() {
+  return (m_conn_handle != BLE_GATT_HANDLE_INVALID);
+}
 /// Checks for error and reports an exception if there was one. Return true on error
 bool jsble_check_error(uint32_t err_code){
 	jsWarn("check error not implemented yet:%x\n",err_code);
