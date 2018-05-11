@@ -17,9 +17,10 @@
 #include "jshardwarePulse.h"
 #include "jshardwareSpi.h"
 #include "jswrap_wifi.h" // jswrap_wifi_restore
-#include "bluetooth.h"
-
+#ifdef BLUETOOTH
+#include "libs/bluetooth/bluetooth.h"
 #include "BLE/esp32_gap_func.h"
+#endif
 
 #include "esp_spi_flash.h"
 #include "spi_flash/include/esp_partition.h"
@@ -51,7 +52,9 @@ static void espruinoTask(void *data) {
   // not sure why this delay is needed?
   vTaskDelay(200 / portTICK_PERIOD_MS);
   jsiInit(true); // Initialize the interactive subsystem
+#ifdef BLUETOOTH
   bluetooth_initDeviceName();
+#endif
   while(1) {
     jsiLoop();   // Perform the primary loop processing
   }
@@ -67,7 +70,9 @@ int app_main(void)
 {
   esp_log_level_set("*", ESP_LOG_ERROR); // set all components to ERROR level - suppress Wifi Info 
   nvs_flash_init();
+#ifdef BLUETOOTH
   jsble_init();
+#endif
   spi_flash_init();
   tcpip_adapter_init();
   timers_Init();
